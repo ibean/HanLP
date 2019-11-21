@@ -39,8 +39,7 @@ public class CoreSynonymDictionary
         }
         catch (Exception e)
         {
-            logger.severe("载入核心同义词词典失败" + e);
-            System.exit(-1);
+            throw new IllegalArgumentException("载入核心同义词词典失败" + e);
         }
     }
 
@@ -116,7 +115,7 @@ public class CoreSynonymDictionary
      * @param withUndefinedItem 是否保留词典中没有的词语
      * @return
      */
-    public static List<CommonSynonymDictionary.SynonymItem> convert(List<Term> sentence, boolean withUndefinedItem)
+    public static List<CommonSynonymDictionary.SynonymItem> createSynonymList(List<Term> sentence, boolean withUndefinedItem)
     {
         List<CommonSynonymDictionary.SynonymItem> synonymItemList = new ArrayList<CommonSynonymDictionary.SynonymItem>(sentence.size());
         for (Term term : sentence)

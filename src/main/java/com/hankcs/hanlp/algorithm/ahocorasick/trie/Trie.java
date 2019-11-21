@@ -37,6 +37,11 @@ public class Trie
         this(new TrieConfig());
     }
 
+    public Trie(Collection<String> keywords)
+    {
+        this();
+        addAllKeyword(keywords);
+    }
 
     public Trie removeOverlaps()
     {
@@ -303,6 +308,28 @@ public class Trie
                 collectedEmits.add(new Emit(position - emit.length() + 1, position, emit));
             }
         }
+    }
+
+    /**
+     * 文本是否包含任何模式
+     *
+     * @param text 待匹配的文本
+     * @return 文本包含模式時回傳true
+     */
+    public boolean hasKeyword(String text)
+    {
+        checkForConstructedFailureStates();
+
+        State currentState = this.rootState;
+        for (int i = 0; i < text.length(); ++i)
+        {
+        	State nextState = getState(currentState, text.charAt(i));
+            if (nextState != null && nextState != currentState && nextState.emit().size() != 0) {
+                return true;
+            }
+            currentState = nextState;
+        }
+        return false;
     }
 
 }

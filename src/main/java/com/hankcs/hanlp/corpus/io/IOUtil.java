@@ -14,6 +14,7 @@ package com.hankcs.hanlp.corpus.io;
 
 import com.hankcs.hanlp.corpus.tag.Nature;
 import com.hankcs.hanlp.dictionary.CoreDictionary;
+import com.hankcs.hanlp.utility.LexiconUtility;
 import com.hankcs.hanlp.utility.TextUtility;
 
 import java.io.*;
@@ -94,8 +95,11 @@ public class IOUtil
             InputStream in = IOAdapter == null ? new FileInputStream(path) :
                     IOAdapter.open(path);
             byte[] fileContent = new byte[in.available()];
-            readBytesFromOtherInputStream(in, fileContent);
+            int read = readBytesFromOtherInputStream(in, fileContent);
             in.close();
+            // 处理 UTF-8 BOM
+            if (read >= 3 && fileContent[0] == -17 && fileContent[1] == -69 && fileContent[2] == -65)
+                return new String(fileContent, 3, fileContent.length - 3, Charset.forName("UTF-8"));
             return new String(fileContent, Charset.forName("UTF-8"));
         }
         catch (FileNotFoundException e)
@@ -255,7 +259,7 @@ public class IOUtil
     }
 
     /**
-     * 将InputStream中的数据读入到字节数组中
+     * 将非FileInputStream的某InputStream中的全部数据读入到字节数组中
      *
      * @param is
      * @return
@@ -263,10 +267,19 @@ public class IOUtil
      */
     public static byte[] readBytesFromOtherInputStream(InputStream is) throws IOException
     {
-        byte[] targetArray = new byte[is.available()];
-        readBytesFromOtherInputStream(is, targetArray);
-        is.close();
-        return targetArray;
+        ByteArrayOutputStream data = new ByteArrayOutputStream();
+
+        int readBytes;
+        byte[] buffer = new byte[Math.max(is.available(), 4096)]; // 最低4KB的缓冲区
+
+        while ((readBytes = is.read(buffer, 0, buffer.length)) != -1)
+        {
+            data.write(buffer, 0, readBytes);
+        }
+
+        data.flush();
+
+        return data.toByteArray();
     }
 
     /**
@@ -279,7 +292,7 @@ public class IOUtil
     public static int readBytesFromOtherInputStream(InputStream is, byte[] targetArray) throws IOException
     {
         assert targetArray != null;
-        assert targetArray.length > 0;
+        if (targetArray.length == 0) return 0;
         int len;
         int off = 0;
         while (off < targetArray.length && (len = is.read(targetArray, off, targetArray.length - off)) != -1)
@@ -313,11 +326,18 @@ public class IOUtil
     {
         LinkedList<String> result = new LinkedList<String>();
         String line = null;
+        boolean first = true;
         try
         {
             BufferedReader bw = new BufferedReader(new InputStreamReader(IOUtil.newInputStream(path), "UTF-8"));
             while ((line = bw.readLine()) != null)
             {
+                if (first)
+                {
+                    first = false;
+                    if (!line.isEmpty() && line.charAt(0) == '\uFEFF')
+                        line = line.substring(1);
+                }
                 result.add(line);
             }
             bw.close();
@@ -372,12 +392,94 @@ public class IOUtil
     }
 
     /**
+     * 删除本地文件
+     * @param path
+     * @return
+     */
+    public static boolean deleteFile(String path)
+    {
+        return new File(path).delete();
+    }
+
+    /**
+     * 去除文件第一行中的UTF8 BOM<br>
+     *     这是Java的bug，且官方不会修复。参考 https://stackoverflow.com/questions/4897876/reading-utf-8-bom-marker
+     * @param line 文件第一行
+     * @return 去除BOM的部分
+     */
+    public static String removeUTF8BOM(String line)
+    {
+        if (line != null && line.startsWith("\uFEFF")) // UTF-8 byte order mark (EF BB BF)
+        {
+            line = line.substring(1);
+        }
+        return line;
+    }
+
+    /**
+     * 递归遍历获取目录下的所有文件
+     *
+     * @param path 根目录
+     * @return 文件列表
+     */
+    public static List<File> fileList(String path)
+    {
+        List<File> fileList = new LinkedList<File>();
+        File folder = new File(path);
+        if (folder.isDirectory())
+            enumerate(folder, fileList);
+        else
+            fileList.add(folder); // 兼容路径为文件的情况
+        return fileList;
+    }
+
+    /**
+     * 递归遍历目录
+     *
+     * @param folder   目录
+     * @param fileList 储存文件
+     */
+    private static void enumerate(File folder, List<File> fileList)
+    {
+        File[] fileArray = folder.listFiles();
+        if (fileArray != null)
+        {
+            for (File file : fileArray)
+            {
+                if (file.isFile() && !file.getName().startsWith(".")) // 过滤隐藏文件
+                {
+                    fileList.add(file);
+                }
+                else
+                {
+                    enumerate(file, fileList);
+                }
+            }
+        }
+    }
+
+    /**
      * 方便读取按行读取大文件
      */
-    public static class LineIterator implements Iterator<String>
+    public static class LineIterator implements Iterator<String>, Iterable<String>
     {
         BufferedReader bw;
         String line;
+
+        public LineIterator(BufferedReader bw)
+        {
+            this.bw = bw;
+            try
+            {
+                line = bw.readLine();
+                line = IOUtil.removeUTF8BOM(line);
+            }
+            catch (IOException e)
+            {
+                logger.warning("在读取过程中发生错误" + TextUtility.exceptionToString(e));
+                bw = null;
+            }
+        }
 
         public LineIterator(String path)
         {
@@ -385,6 +487,7 @@ public class IOUtil
             {
                 bw = new BufferedReader(new InputStreamReader(IOUtil.newInputStream(path), "UTF-8"));
                 line = bw.readLine();
+                line = IOUtil.removeUTF8BOM(line);
             }
             catch (FileNotFoundException e)
             {
@@ -473,6 +576,12 @@ public class IOUtil
         {
             throw new UnsupportedOperationException("只读，不可写！");
         }
+
+        @Override
+        public Iterator<String> iterator()
+        {
+            return this;
+        }
     }
 
     /**
@@ -558,7 +667,7 @@ public class IOUtil
 
     /**
      * 加载词典，词典必须遵守HanLP核心词典格式
-     * @param pathArray 词典路径，可以有任意个
+     * @param pathArray 词典路径，可以有任意个。每个路径支持用空格表示默认词性，比如“全国地名大全.txt ns”
      * @return 一个储存了词条的map
      * @throws IOException 异常表示加载失败
      */
@@ -567,8 +676,21 @@ public class IOUtil
         TreeMap<String, CoreDictionary.Attribute> map = new TreeMap<String, CoreDictionary.Attribute>();
         for (String path : pathArray)
         {
+            File file = new File(path);
+            String fileName = file.getName();
+            int natureIndex = fileName.lastIndexOf(' ');
+            Nature defaultNature = Nature.n;
+            if (natureIndex > 0)
+            {
+                String natureString = fileName.substring(natureIndex + 1);
+                path = file.getParent() + File.separator + fileName.substring(0, natureIndex);
+                if (natureString.length() > 0 && !natureString.endsWith(".txt") && !natureString.endsWith(".csv"))
+                {
+                    defaultNature = Nature.create(natureString);
+                }
+            }
             BufferedReader br = new BufferedReader(new InputStreamReader(IOUtil.newInputStream(path), "UTF-8"));
-            loadDictionary(br, map);
+            loadDictionary(br, map, path.endsWith(".csv"), defaultNature);
         }
 
         return map;
@@ -580,19 +702,39 @@ public class IOUtil
      * @param storage 储存位置
      * @throws IOException 异常表示加载失败
      */
-    public static void loadDictionary(BufferedReader br, TreeMap<String, CoreDictionary.Attribute> storage) throws IOException
+    public static void loadDictionary(BufferedReader br, TreeMap<String, CoreDictionary.Attribute> storage, boolean isCSV, Nature defaultNature) throws IOException
     {
+        String splitter = "\\s";
+        if (isCSV)
+        {
+            splitter = ",";
+        }
         String line;
+        boolean firstLine = true;
         while ((line = br.readLine()) != null)
         {
-            String param[] = line.split("\\s");
-            int natureCount = (param.length - 1) / 2;
-            CoreDictionary.Attribute attribute = new CoreDictionary.Attribute(natureCount);
-            for (int i = 0; i < natureCount; ++i)
+            if (firstLine)
             {
-                attribute.nature[i] = Enum.valueOf(Nature.class, param[1 + 2 * i]);
-                attribute.frequency[i] = Integer.parseInt(param[2 + 2 * i]);
-                attribute.totalFrequency += attribute.frequency[i];
+                line = IOUtil.removeUTF8BOM(line);
+                firstLine = false;
+            }
+            String param[] = line.split(splitter);
+
+            int natureCount = (param.length - 1) / 2;
+            CoreDictionary.Attribute attribute;
+            if (natureCount == 0)
+            {
+                attribute = new CoreDictionary.Attribute(defaultNature);
+            }
+            else
+            {
+                attribute = new CoreDictionary.Attribute(natureCount);
+                for (int i = 0; i < natureCount; ++i)
+                {
+                    attribute.nature[i] = LexiconUtility.convertStringToNature(param[1 + 2 * i]);
+                    attribute.frequency[i] = Integer.parseInt(param[2 + 2 * i]);
+                    attribute.totalFrequency += attribute.frequency[i];
+                }
             }
             storage.put(param[0], attribute);
         }
@@ -607,5 +749,16 @@ public class IOUtil
         {
             TextUtility.writeString(nature.toString(), out);
         }
+    }
+
+    /**
+     * 本地文件是否存在
+     * @param path
+     * @return
+     */
+    public static boolean isFileExisted(String path)
+    {
+        File file = new File(path);
+        return file.isFile() && file.exists();
     }
 }
